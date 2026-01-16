@@ -110,12 +110,55 @@ function bufferToWave(abuffer: AudioBuffer, len: number) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+/**
+ * Robustly sanitizes and parses JSON response from model.
+ * Handles cases where the response might be truncated or contain markdown.
+ */
+const parseSafeJson = (text: string): any => {
+  let cleaned = text.trim();
+  // Remove markdown code blocks if present
+  cleaned = cleaned.replace(/^```json\s*/, '').replace(/```\s*$/, '').trim();
+  
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  
+  if (start === -1) throw new Error("Không tìm thấy cấu trúc dữ liệu JSON trong phản hồi AI.");
+  
+  // If no end bracket, the JSON is definitely truncated
+  if (end === -1 || end < start) {
+    // Basic attempt to close the JSON if it's truncated during a list or object
+    cleaned = cleaned + "]}"; // This is a common truncation point for our schema
+  } else {
+    cleaned = cleaned.substring(start, end + 1);
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // If it still fails, try to find a balanced subset
+    let balance = 0;
+    let cutoff = -1;
+    for (let i = start; i < cleaned.length; i++) {
+      if (cleaned[i] === '{') balance++;
+      if (cleaned[i] === '}') balance--;
+      if (balance === 0) {
+        cutoff = i;
+        break;
+      }
+    }
+    if (cutoff !== -1) {
+      return JSON.parse(cleaned.substring(start, cutoff + 1));
+    }
+    throw e;
+  }
+};
+
 // --- Resilience Wrapper ---
 async function callWithRetry<T>(
   fn: () => Promise<T>, 
   onRetry: (msg: string) => void,
-  retries = 6, 
-  initialDelay = 35000 
+  retries = 8, 
+  initialDelay = 45000 
 ): Promise<T> {
   let attempt = 0;
   while (attempt < retries) {
@@ -124,14 +167,21 @@ async function callWithRetry<T>(
     } catch (error: any) {
       attempt++;
       const errorMsg = error.message?.toLowerCase() || "";
-      const isQuotaError = errorMsg.includes('429') || error.status === 429 || errorMsg.includes('resource_exhausted');
-      if (attempt >= retries || !isQuotaError) throw error;
-      const delay = (initialDelay * Math.pow(2.8, attempt - 1)) + (Math.random() * 10000);
-      onRetry(`Đang chờ hạn mức API (429)... Thử lại sau ${Math.round(delay/1000)}s (${attempt}/${retries})`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      const isQuotaError = errorMsg.includes('429') || error.status === 429 || errorMsg.includes('resource_exhausted') || errorMsg.includes('quota exceeded');
+      
+      if (attempt >= retries) throw error;
+      
+      if (isQuotaError) {
+        const delay = (initialDelay * Math.pow(2.2, attempt - 1)) + (Math.random() * 5000);
+        onRetry(`Đang chờ hạn mức API (429). Thử lại sau ${Math.round(delay/1000)}s (${attempt}/${retries}). Vui lòng giữ tab này mở.`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        if (attempt >= 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
   }
-  throw new Error("Lỗi hạn mức API liên tục. Vui lòng quay lại sau ít phút.");
+  throw new Error("Không thể hoàn tất yêu cầu sau nhiều lần thử lại.");
 }
 
 const ViralVibeApp: React.FC = () => {
@@ -147,7 +197,6 @@ const ViralVibeApp: React.FC = () => {
   const [prompt, setPrompt] = useState<string>('Nàng thơ trong vườn hoa ánh sáng rực rỡ');
   const [selectedTemplate, setSelectedTemplate] = useState<VideoTemplate>(VIDEO_TEMPLATES[0]);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [selectedVoice, setSelectedVoice] = useState<AIVoice>('Puck');
 
@@ -157,8 +206,11 @@ const ViralVibeApp: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      if (window.aistudio?.hasSelectedApiKey) setApiKeySelected(await window.aistudio.hasSelectedApiKey());
-      else setApiKeySelected(!!process.env.API_KEY);
+      if (window.aistudio?.hasSelectedApiKey) {
+        setApiKeySelected(await window.aistudio.hasSelectedApiKey());
+      } else {
+        setApiKeySelected(!!process.env.API_KEY);
+      }
     };
     checkKey();
   }, []);
@@ -173,7 +225,7 @@ const ViralVibeApp: React.FC = () => {
   const handleGenerate = async () => {
     if (!sourceImage) return;
     setLoading(true);
-    setStatus('Đang lên kịch bản TikTok 20 giây xu hướng...');
+    setStatus('Đang phác thảo kịch bản TikTok 20s...');
     setMetadata(null);
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     if (ttsUrl) URL.revokeObjectURL(ttsUrl);
@@ -186,9 +238,11 @@ const ViralVibeApp: React.FC = () => {
       const metaRes = await callWithRetry(async () => {
         return await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `Chủ đề: ${prompt}. Mẫu: ${selectedTemplate.label}. Hãy tạo kịch bản viral TikTok chính xác 20 giây. Trả về JSON: catchyTitles (mảng 3 tiêu đề gây thu hút), hashtags (mảng 5 hashtag xu hướng), description (mô tả viral), viralScore (số 0-100), subtitles (mảng object {text, start, end} từ 0s đến 20s). Phụ đề phải cực kỳ lôi cuốn.`,
+          contents: `Topic: ${prompt}. Template: ${selectedTemplate.label}. Output JSON: catchyTitles (3), hashtags (5), description, viralScore, subtitles (array of {text, start, end} up to 20s).`,
           config: {
             responseMimeType: 'application/json',
+            maxOutputTokens: 1000, 
+            thinkingConfig: { thinkingBudget: 100 },
             responseSchema: {
               type: Type.OBJECT,
               properties: {
@@ -203,13 +257,14 @@ const ViralVibeApp: React.FC = () => {
                     properties: { text: { type: Type.STRING }, start: { type: Type.NUMBER }, end: { type: Type.NUMBER } }
                   }
                 }
-              }
+              },
+              required: ["catchyTitles", "hashtags", "description", "viralScore", "subtitles"]
             }
           }
         });
       }, (msg) => setStatus(msg));
 
-      const meta: ViralMetadata = JSON.parse(metaRes.text || '{}');
+      const meta: ViralMetadata = parseSafeJson(metaRes.text || '{}');
       if (meta.subtitles) {
         meta.subtitles = meta.subtitles.map((s, idx) => ({
           ...s,
@@ -220,14 +275,14 @@ const ViralVibeApp: React.FC = () => {
       }
       setMetadata(meta);
 
-      await new Promise(r => setTimeout(r, 6000));
+      await new Promise(r => setTimeout(r, 2000));
       setStatus('AI đang lồng tiếng chuyên nghiệp...');
       
       const speechText = meta.subtitles?.map(s => s.text).join('. ') || "";
       const ttsRes = await callWithRetry(async () => {
         return await ai.models.generateContent({
           model: 'gemini-2.5-flash-preview-tts',
-          contents: [{ parts: [{ text: `Đọc lôi cuốn, kịch tính cho TikTok: ${speechText}` }] }],
+          contents: [{ parts: [{ text: `Đọc lôi cuốn: ${speechText}` }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } }
@@ -242,13 +297,14 @@ const ViralVibeApp: React.FC = () => {
         setTtsUrl(URL.createObjectURL(bufferToWave(audioBuffer, audioBuffer.length)));
       }
 
-      await new Promise(r => setTimeout(r, 12000));
-      setStatus('Render Giai đoạn 1 (0-6s)...');
+      await new Promise(r => setTimeout(r, 4000));
+      setStatus('Khởi tạo Video Giai đoạn 1 (0-6s)...');
 
       let op = await callWithRetry(async () => {
-        return await ai.models.generateVideos({
+        const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        return await currentAi.models.generateVideos({
           model: 'veo-3.1-generate-preview',
-          prompt: `${selectedTemplate.prompt}. ${prompt}. Ultra-consistent character and style, hyper-realistic physics.`,
+          prompt: `${selectedTemplate.prompt}. ${prompt}.`,
           config: { 
             resolution: '720p', 
             aspectRatio: '16:9', 
@@ -261,51 +317,56 @@ const ViralVibeApp: React.FC = () => {
       }, (msg) => setStatus(msg));
 
       while (!op.done) {
-        await new Promise(r => setTimeout(r, 20000));
-        op = await ai.operations.getVideosOperation({ operation: op });
+        await new Promise(r => setTimeout(r, 15000));
+        const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        op = await currentAi.operations.getVideosOperation({ operation: op });
       }
 
       let currentVideo = op.response?.generatedVideos?.[0]?.video;
-      if (!currentVideo) throw new Error("Giai đoạn 1 thất bại.");
+      if (!currentVideo) throw new Error("Giai đoạn 1 không tìm thấy video. Vui lòng thử lại.");
 
+      // Recursive extensions
       for (let i = 0; i < 2; i++) {
         const stage = i + 2;
-        setStatus(`Hồi phục hạn mức API cho Giai đoạn ${stage}/3...`);
-        await new Promise(r => setTimeout(r, 25000));
+        setStatus(`Chờ API sẵn sàng cho Giai đoạn ${stage}/3...`);
+        await new Promise(r => setTimeout(r, 15000));
         
-        setStatus(`Đang mở rộng Video (+7s)...`);
+        setStatus(`Mở rộng Video (+7s) - Giai đoạn ${stage}...`);
         op = await callWithRetry(async () => {
-          return await ai.models.generateVideos({
+          const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          return await currentAi.models.generateVideos({
             model: 'veo-3.1-generate-preview',
-            prompt: `Tiếp tục diễn biến một cách mượt mà, đồng nhất tuyệt đối về nhân vật và môi trường: ${prompt}.`,
+            prompt: `Tiếp diễn mượt mà: ${prompt}.`,
             video: currentVideo,
             config: { resolution: '720p', aspectRatio: '16:9' }
           });
         }, (msg) => setStatus(msg));
 
         while (!op.done) {
-          await new Promise(r => setTimeout(r, 20000));
-          op = await ai.operations.getVideosOperation({ operation: op });
+          await new Promise(r => setTimeout(r, 15000));
+          const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          op = await currentAi.operations.getVideosOperation({ operation: op });
         }
 
-        if (op.response?.generatedVideos?.[0]?.video) currentVideo = op.response.generatedVideos[0].video;
-        else break;
+        if (op.response?.generatedVideos?.[0]?.video) {
+          currentVideo = op.response.generatedVideos[0].video;
+        } else {
+          break;
+        }
       }
 
       const dl = currentVideo?.uri;
-      if (!dl) throw new Error("Không lấy được video.");
+      if (!dl) throw new Error("Không thể lấy liên kết tải video cuối cùng.");
+      
+      setStatus('Đang tải dữ liệu video gốc...');
       const videoResp = await fetch(`${dl}&key=${process.env.API_KEY}`);
+      if (!videoResp.ok) throw new Error("Lỗi tải video từ server.");
       const videoBlob = await videoResp.blob();
       setVideoUrl(URL.createObjectURL(videoBlob));
-      setStatus('Video 20s siêu thực đã sẵn sàng! Mở Theater Mode để xem.');
+      setStatus('Sẵn sàng! Hãy mở Theater Mode để trải nghiệm.');
     } catch (e: any) {
       console.error(e);
-      if (e.message?.includes("Requested entity was not found")) {
-        setApiKeySelected(false);
-        setStatus("Lỗi API Key. Vui lòng chọn lại Key.");
-      } else {
-        setStatus(`Lỗi: ${e.message}`);
-      }
+      setStatus(`Lỗi: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -313,7 +374,7 @@ const ViralVibeApp: React.FC = () => {
 
   const handleExport = async () => {
     if (!videoUrl || !videoRef.current || !metadata) return;
-    setExporting(true); setExportProgress(0); setStatus('Đang đóng gói video HD chất lượng cao...');
+    setExporting(true); setExportProgress(0); setStatus('Đang nén video chất lượng HD...');
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false })!;
@@ -323,15 +384,21 @@ const ViralVibeApp: React.FC = () => {
     const dest = audioCtx.createMediaStreamDestination();
     const videoSource = audioCtx.createMediaElementSource(video); videoSource.connect(dest);
     if (ttsUrl && audioRef.current) { const ttsSource = audioCtx.createMediaElementSource(audioRef.current); ttsSource.connect(dest); }
-    const recorder = new MediaRecorder(new MediaStream([...stream.getVideoTracks(), ...dest.stream.getAudioTracks()]), { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 60000000 });
+    
+    const recorder = new MediaRecorder(new MediaStream([...stream.getVideoTracks(), ...dest.stream.getAudioTracks()]), { 
+      mimeType: 'video/webm;codecs=vp9', 
+      videoBitsPerSecond: 10000000 
+    });
     const chunks: Blob[] = []; recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: 'video/mp4' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `ViralVibe_TikTok_20s_${Date.now()}.mp4`; a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `ViralVibe_PRO_${Date.now()}.mp4`; a.click();
       setExporting(false);
     };
+    
     video.currentTime = 0; if (audioRef.current) audioRef.current.currentTime = 0;
     try { await video.play(); if (audioRef.current) await audioRef.current.play(); recorder.start(); } catch (e) { recorder.start(); }
+    
     const renderLoop = () => {
       if (!exporting || video.paused || video.ended) { if (recorder.state === 'recording') recorder.stop(); return; }
       setExportProgress((video.currentTime / video.duration) * 100);
@@ -355,31 +422,27 @@ const ViralVibeApp: React.FC = () => {
     renderLoop();
   };
 
-  const activeSubtitle = metadata?.subtitles?.find(s => currentTime >= (s.start || 0) && currentTime <= (s.end || 0));
-
   useEffect(() => {
     const v = videoRef.current; if (!v) return;
     const update = () => setCurrentTime(v.currentTime); v.addEventListener('timeupdate', update);
     return () => v.removeEventListener('timeupdate', update);
   }, [videoUrl]);
 
+  const activeSubtitle = metadata?.subtitles?.find(s => currentTime >= (s.start || 0) && currentTime <= (s.end || 0));
+
   return (
     <div className={`min-h-screen bg-[#050505] text-white flex flex-col font-sans transition-all selection:bg-[#FE2C55] ${isFullscreen ? 'overflow-hidden' : ''}`}>
-      {/* Immersive Theater Mode (Full Screen Preview) */}
       {isFullscreen && (
         <div className="fixed inset-0 z-[200] bg-black flex items-center justify-center p-0 animate-fade-in">
            <div className="absolute inset-0 overflow-hidden opacity-40 pointer-events-none">
              <video src={videoUrl!} autoPlay loop muted className="w-full h-full object-cover scale-150 blur-[100px]" />
            </div>
-           
            <div className="relative h-full aspect-[9/16] bg-black shadow-[0_0_200px_rgba(254,44,85,0.4)] z-10">
             <video ref={videoRef} src={videoUrl!} autoPlay loop className="w-full h-full object-cover" />
-            
-            {/* Simulation of TikTok Overlay */}
             <div className="absolute inset-0 pointer-events-none p-8 lg:p-12 flex flex-col justify-end bg-gradient-to-t from-black/80 via-transparent to-transparent">
                <div className="flex justify-between items-end mb-16 animate-slide-up">
                  <div className="space-y-4 max-w-[80%]">
-                    <p className="font-black text-2xl italic text-[#25F4EE] drop-shadow-lg">@ViralVibe_Pro</p>
+                    <p className="font-black text-2xl italic text-[#25F4EE] drop-shadow-lg">@ViralVibe_Studio</p>
                     <p className="text-lg font-medium leading-tight text-zinc-100">{metadata?.description}</p>
                     <div className="flex flex-wrap gap-2">
                        {metadata?.hashtags?.map((tag, i) => (
@@ -388,12 +451,10 @@ const ViralVibeApp: React.FC = () => {
                     </div>
                  </div>
                  <div className="flex flex-col items-center gap-10 mb-6 pointer-events-auto">
-                    <div className="flex flex-col items-center cursor-pointer group"><span className="text-5xl drop-shadow-xl group-hover:scale-110 transition-transform">❤️</span><span className="text-xs font-black mt-1">2.8M</span></div>
-                    <div className="flex flex-col items-center cursor-pointer group"><span className="text-5xl drop-shadow-xl group-hover:scale-110 transition-transform">💬</span><span className="text-xs font-black mt-1">156K</span></div>
-                    <div className="flex flex-col items-center cursor-pointer group"><span className="text-5xl drop-shadow-xl group-hover:scale-110 transition-transform">↗️</span><span className="text-xs font-black mt-1">Share</span></div>
+                    <div className="flex flex-col items-center cursor-pointer group"><span className="text-5xl drop-shadow-xl">❤️</span><span className="text-xs font-black mt-1">2.8M</span></div>
+                    <div className="flex flex-col items-center cursor-pointer group"><span className="text-5xl drop-shadow-xl">💬</span><span className="text-xs font-black mt-1">156K</span></div>
                  </div>
                </div>
-               
                {activeSubtitle && (
                   <div className="absolute inset-x-0 bottom-[24%] text-center px-10">
                     <span className="bg-black/90 text-[#FE2C55] px-8 py-5 rounded-[2.5rem] font-black text-3xl uppercase border border-[#FE2C55]/30 inline-block animate-bounce shadow-2xl backdrop-blur-md">
@@ -402,156 +463,108 @@ const ViralVibeApp: React.FC = () => {
                   </div>
                )}
             </div>
-            
             <button onClick={() => setIsFullscreen(false)} className="absolute top-10 right-10 w-16 h-16 bg-black/60 rounded-full flex items-center justify-center text-3xl border border-white/20 hover:bg-[#FE2C55] transition-all z-20">✕</button>
           </div>
         </div>
       )}
 
-      {/* Modern App Header */}
       <nav className="p-6 border-b border-white/5 flex justify-between items-center bg-black/85 backdrop-blur-3xl sticky top-0 z-50">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-[#FE2C55] rounded-2xl flex items-center justify-center font-black italic shadow-[0_0_50px_rgba(254,44,85,0.4)] rotate-3">V</div>
+          <div className="w-12 h-12 bg-[#FE2C55] rounded-2xl flex items-center justify-center font-black italic rotate-3 shadow-[0_0_40px_rgba(254,44,85,0.4)]">V</div>
           <h1 className="text-2xl font-black italic uppercase tracking-tighter">ViralVibe <span className="text-[#25F4EE]">ULTRA</span></h1>
         </div>
-        <div className="flex items-center gap-6">
-          {!apiKeySelected && <button onClick={handleSelectKey} className="bg-white text-black px-8 py-3 rounded-full font-black text-[10px] tracking-widest uppercase hover:bg-[#FE2C55] hover:text-white transition-all shadow-xl">ACTIVATE ENGINE</button>}
-          {apiKeySelected && <div className="flex items-center gap-3 bg-zinc-900/80 px-4 py-2 rounded-full border border-white/10"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span><span className="text-[10px] font-black uppercase tracking-widest">System Ready</span></div>}
-        </div>
+        {!apiKeySelected && (
+            <button onClick={handleSelectKey} className="bg-white text-black px-8 py-3 rounded-full font-black text-[10px] tracking-widest uppercase hover:bg-[#FE2C55] hover:text-white transition-all">KÍCH HOẠT ENGINE 🚀</button>
+        )}
       </nav>
 
       <main className="flex-1 p-8 max-w-[1700px] mx-auto w-full grid grid-cols-1 lg:grid-cols-4 gap-12">
-        {/* Left Sidebar: Engine Presets */}
         <div className="lg:col-span-1 space-y-8 animate-fade-in-left">
            <section className="bg-zinc-900/30 p-8 rounded-[3rem] border border-white/5 shadow-2xl space-y-6">
-             <h2 className="text-[10px] font-black uppercase text-[#FE2C55] tracking-widest">ENGINE PRESETS</h2>
+             <h2 className="text-[10px] font-black uppercase text-[#FE2C55] tracking-widest">PHONG CÁCH RENDER</h2>
              <div className="grid grid-cols-1 gap-4">
                {VIDEO_TEMPLATES.map(t => (
-                 <button key={t.id} onClick={() => setSelectedTemplate(t)} className={`flex flex-col gap-2 p-6 rounded-[2rem] border transition-all text-left group ${selectedTemplate.id === t.id ? 'bg-white text-black border-white scale-[1.03] shadow-2xl' : 'bg-black/40 border-white/5 opacity-70 hover:opacity-100'}`}>
-                   <div className="flex items-center justify-between">
-                     <span className="text-3xl transition-transform group-hover:scale-125">{t.icon}</span>
-                     <span className="text-[8px] font-black bg-[#FE2C55] text-white px-2 py-1 rounded-full">{t.tag}</span>
-                   </div>
-                   <span className="font-black text-xs uppercase mt-3 tracking-tight">{t.label}</span>
-                   <p className="text-[10px] opacity-60 leading-relaxed line-clamp-2">{t.description}</p>
+                 <button key={t.id} onClick={() => setSelectedTemplate(t)} className={`flex flex-col gap-2 p-6 rounded-[2rem] border transition-all text-left ${selectedTemplate.id === t.id ? 'bg-white text-black border-white' : 'bg-black/40 border-white/5 opacity-70'}`}>
+                   <span className="text-3xl">{t.icon}</span>
+                   <span className="font-black text-xs uppercase mt-3">{t.label}</span>
+                   <p className="text-[10px] opacity-60 leading-relaxed">{t.description}</p>
                  </button>
                ))}
              </div>
            </section>
         </div>
 
-        {/* Center: Workspace */}
         <div className="lg:col-span-2 space-y-8 animate-fade-in">
            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
               <section className="bg-zinc-900/30 p-8 rounded-[3.5rem] border border-white/5 shadow-2xl space-y-6">
-                 <h2 className="text-[10px] font-black uppercase text-[#25F4EE] tracking-widest">CREATIVE STUDIO</h2>
-                 <textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="w-full bg-black/60 border border-white/10 rounded-3xl px-6 py-5 outline-none font-bold text-sm min-h-[160px] focus:border-[#FE2C55]/50 transition-all placeholder:opacity-20" placeholder="MÔ TẢ Ý TƯỞNG CỦA BẠN..." />
+                 <h2 className="text-[10px] font-black uppercase text-[#25F4EE] tracking-widest">STUDIO TRUNG TÂM</h2>
+                 <textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="w-full bg-black/60 border border-white/10 rounded-3xl px-6 py-5 outline-none font-bold text-sm min-h-[160px] focus:border-[#FE2C55]/50 transition-all" />
                  <div onClick={() => fileInputRef.current?.click()} className="relative border-2 border-dashed border-white/10 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-[#FE2C55]/50 transition-all bg-black/20 group">
-                    {sourceImage ? (
-                      <img src={sourceImage} className="max-h-56 mx-auto rounded-3xl shadow-2xl transition-transform group-hover:scale-105" alt="Frame" />
-                    ) : (
-                      <div className="opacity-20 group-hover:opacity-40 transition-opacity">
-                        <p className="text-5xl mb-4">🖼️</p>
-                        <p className="font-black uppercase text-[10px] tracking-widest">UPLOAD START FRAME</p>
-                      </div>
-                    )}
+                    {sourceImage ? <img src={sourceImage} className="max-h-56 mx-auto rounded-3xl shadow-2xl" alt="Start Frame" /> : <div className="opacity-20"><p className="text-5xl mb-4">🖼️</p><p className="font-black uppercase text-[10px]">TẢI ẢNH GỐC</p></div>}
                     <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if(f) { const r = new FileReader(); r.onloadend = () => setSourceImage(r.result as string); r.readAsDataURL(f); } }} />
                  </div>
               </section>
-
               <div className="flex flex-col gap-8">
-                 <div className="relative group mx-auto w-full aspect-[9/16] bg-black rounded-[4rem] overflow-hidden border-[14px] border-zinc-900 shadow-[0_0_100px_rgba(0,0,0,0.6)]">
+                 <div className="relative group mx-auto w-full aspect-[9/16] bg-black rounded-[4rem] overflow-hidden border-[14px] border-zinc-900">
                     {videoUrl ? (
                        <>
                         <video ref={videoRef} src={videoUrl} loop muted className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-6">
-                            <button onClick={() => setIsFullscreen(true)} className="bg-white text-black px-10 py-4 rounded-full font-black uppercase text-[10px] tracking-widest hover:bg-[#FE2C55] hover:text-white transition-all shadow-2xl">THEATER MODE 🎬</button>
-                            <button onClick={() => { if(videoRef.current) videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause() }} className="w-20 h-20 bg-white/10 backdrop-blur-md text-white border border-white/20 rounded-full text-4xl flex items-center justify-center hover:scale-110 transition-all">▶</button>
+                            <button onClick={() => setIsFullscreen(true)} className="bg-white text-black px-10 py-4 rounded-full font-black uppercase text-[10px] tracking-widest">THEATER MODE 🎬</button>
                         </div>
-                        {activeSubtitle && <div className="absolute inset-x-6 bottom-[26%] text-center pointer-events-none"><span className="bg-[#FE2C55] text-white px-6 py-3 rounded-2xl font-black text-[12px] uppercase shadow-2xl border border-white/10">{activeSubtitle.text}</span></div>}
                        </>
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center gap-6 opacity-10">
-                        <div className="w-20 h-20 border-4 border-white rounded-full border-t-transparent animate-spin"></div>
-                        <span className="font-black italic text-4xl tracking-tighter uppercase">VEO 3.1 PRO</span>
+                        <div className="w-16 h-16 border-4 border-white rounded-full border-t-transparent animate-spin"></div>
                       </div>
                     )}
                  </div>
-                 <button onClick={handleGenerate} disabled={loading || !sourceImage || !apiKeySelected} className="group relative w-full py-8 bg-[#25F4EE] text-black rounded-[2.5rem] font-black text-xl uppercase shadow-[0_20px_60px_rgba(37,244,238,0.3)] hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30 overflow-hidden">
-                    <span className="relative z-10">{loading ? 'RENDERING 20S MASTERPIECE...' : 'GENERATE 20S VIRAL VIDEO 🚀'}</span>
-                    <div className="absolute inset-0 bg-white/20 -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                 <button onClick={handleGenerate} disabled={loading || !sourceImage || !apiKeySelected} className="w-full py-8 bg-[#25F4EE] text-black rounded-[2.5rem] font-black text-xl uppercase shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30">
+                    {loading ? 'ĐANG XỬ LÝ...' : 'TẠO VIDEO 20S 🚀'}
                  </button>
               </div>
            </div>
         </div>
 
-        {/* Right Sidebar: Viral Dashboard */}
         <div className="lg:col-span-1 space-y-8 animate-fade-in-right">
            <section className="bg-zinc-900/30 p-8 rounded-[3rem] border border-white/5 shadow-2xl space-y-8">
-             <h2 className="text-[10px] font-black uppercase text-[#25F4EE] tracking-widest">VIRAL INTELLIGENCE</h2>
+             <h2 className="text-[10px] font-black uppercase text-[#25F4EE] tracking-widest">CẤU HÌNH VIRAL</h2>
              <div className="space-y-6">
                 {metadata ? (
-                  <>
-                    <div className="p-6 bg-black/40 rounded-3xl border border-white/5 text-center">
-                      <span className="text-[9px] font-black uppercase opacity-40">VIRAL SCORE PREDICTION</span>
-                      <div className="text-5xl font-black italic text-[#FE2C55] mt-2">{metadata.viralScore}%</div>
-                      <div className="mt-4 h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                         <div className="h-full bg-gradient-to-r from-[#25F4EE] to-[#FE2C55]" style={{ width: `${metadata.viralScore}%` }}></div>
-                      </div>
-                    </div>
-                    <div className="p-6 bg-black/40 rounded-3xl border border-white/5">
-                      <span className="text-[9px] font-black uppercase opacity-40">SUGGESTED TITLES</span>
-                      <div className="mt-4 space-y-3">
-                        {metadata.catchyTitles?.map((t, i) => (
-                          <div key={i} className="text-xs font-bold leading-tight border-l-2 border-[#25F4EE] pl-4 py-1">{t}</div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="p-6 bg-black/40 rounded-3xl border border-white/5">
-                      <span className="text-[9px] font-black uppercase opacity-40">SELECTED VOICE</span>
-                      <div className="grid grid-cols-1 gap-2 mt-4">
-                        {AI_VOICES.map(v => (
-                          <button key={v.id} onClick={() => setSelectedVoice(v.id)} className={`p-4 rounded-2xl border text-[10px] font-black transition-all text-left ${selectedVoice === v.id ? 'bg-white text-black border-white' : 'bg-black/40 border-white/5 opacity-60'}`}>{v.label}</button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-center p-12 opacity-10"><p className="text-4xl">📊</p><p className="text-[10px] font-black mt-4 uppercase">Waiting for Metadata</p></div>
-                )}
+                  <div className="p-6 bg-black/40 rounded-3xl border border-white/5 text-center">
+                    <span className="text-[9px] font-black uppercase opacity-40">CHỈ SỐ XU HƯỚNG</span>
+                    <div className="text-5xl font-black italic text-[#FE2C55] mt-2">{metadata.viralScore}%</div>
+                  </div>
+                ) : <p className="opacity-10 text-center uppercase font-black text-[10px]">Đang chờ dữ liệu</p>}
+                <div className="grid grid-cols-1 gap-2">
+                   {AI_VOICES.map(v => (
+                     <button key={v.id} onClick={() => setSelectedVoice(v.id)} className={`p-4 rounded-2xl border text-[10px] font-black transition-all ${selectedVoice === v.id ? 'bg-white text-black border-white' : 'bg-black/40 border-white/5 opacity-60'}`}>{v.label}</button>
+                   ))}
+                </div>
              </div>
-
-             <div className="pt-4">
-                <button onClick={handleExport} disabled={exporting || !videoUrl} className="w-full py-8 bg-[#FE2C55] rounded-[2.5rem] font-black text-lg uppercase shadow-2xl hover:bg-white hover:text-black hover:scale-[1.03] transition-all disabled:opacity-20 active:scale-95">
-                  {exporting ? `EXPORTING ${Math.round(exportProgress)}%` : 'EXPORT 20S VIRAL MP4 📥'}
-                </button>
-             </div>
+             <button onClick={handleExport} disabled={exporting || !videoUrl} className="w-full py-8 bg-[#FE2C55] rounded-[2.5rem] font-black text-lg uppercase shadow-2xl hover:scale-[1.03] transition-all disabled:opacity-20 active:scale-95">
+                {exporting ? `RENDER ${Math.round(exportProgress)}%` : 'TẢI MP4 PRO 📥'}
+             </button>
            </section>
         </div>
       </main>
 
-      {/* Floating Status Notification */}
       {status && (
-        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 px-10 py-6 bg-black/95 backdrop-blur-3xl border border-[#25F4EE]/40 rounded-full text-[12px] font-black uppercase text-[#25F4EE] z-[300] shadow-[0_0_80px_rgba(37,244,238,0.2)] flex items-center gap-6 animate-slide-up">
-          <div className="w-3 h-3 rounded-full bg-[#25F4EE] animate-ping"></div>
-          {status}
+        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 px-10 py-6 bg-black border border-[#25F4EE]/40 rounded-full text-[12px] font-black uppercase text-[#25F4EE] z-[300] flex items-center gap-6 animate-slide-up">
+          <div className="w-2 h-2 rounded-full bg-[#25F4EE] animate-pulse"></div>
+          <span className="max-w-[80vw] truncate">{status}</span>
         </div>
       )}
 
       <style>{`
-        @keyframes slideUp { from { opacity: 0; transform: translate(-50%, 60px); } to { opacity: 1; transform: translate(-50%, 0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translate(-50%, 40px); } to { opacity: 1; transform: translate(-50%, 0); } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes fadeInLeft { from { opacity: 0; transform: translateX(-30px); } to { opacity: 1; transform: translateX(0); } }
-        @keyframes fadeInRight { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
-        
+        @keyframes fadeInLeft { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
         .animate-slide-up { animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .animate-fade-in { animation: fadeIn 0.8s ease-out forwards; }
         .animate-fade-in-left { animation: fadeInLeft 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        .animate-fade-in-right { animation: fadeInRight 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        
         textarea { resize: none; }
       `}</style>
-      
       {ttsUrl && <audio ref={audioRef} src={ttsUrl} className="hidden" />}
     </div>
   );
