@@ -4,7 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type, Modality } from '@google/genai';
 
 // --- Constants & Types ---
-type AIVoice = 'Kore' | 'Puck' | 'Zephyr' | 'Charon';
+type AIVoice = 'Kore' | 'Puck' | 'Zephyr' | 'Charon' | 'Fenrir';
+type VideoDuration = 10 | 20 | 30 | 60;
 
 interface SubtitleSegment {
   id: string;
@@ -18,6 +19,7 @@ interface ViralMetadata {
   hashtags: string[];
   description: string;
   subtitles: SubtitleSegment[];
+  visualPrompt: string; 
   viralScore: number;
   cta: string;
 }
@@ -30,54 +32,71 @@ interface VideoTemplate {
   description: string;
 }
 
-interface SavedProject {
+interface ViralFramework {
   id: string;
-  name: string;
-  prompt: string;
-  templateId: string;
-  voice: AIVoice;
-  sourceImage: string | null;
-  metadata: ViralMetadata | null;
-  timestamp: number;
+  label: string;
+  description: string;
 }
-
-const SAVED_PROJECTS_KEY = 'viralvibe_projects_v1';
-const DRAFT_KEY = 'viralvibe_draft';
 
 const VIDEO_TEMPLATES: VideoTemplate[] = [
   { 
     id: 'tiktok-viral-high', 
-    label: 'TikTok Trend 🔥', 
-    prompt: 'Hyper-realistic vertical 9:16 cinematic video, TikTok trend aesthetic, ultra-sharp 4k details, high-impact visuals, vibrant lighting, fast-paced cinematic cuts, trending transitions.', 
+    label: 'Trend TikTok 🔥', 
+    prompt: 'Cinematic 9:16, high-energy movement, vibrant colors, trending TikTok aesthetic.', 
     icon: '🔥', 
-    description: 'Phong cách xu hướng mạnh mẽ, sắc nét.' 
+    description: 'Phong cách xu hướng mạnh mẽ.' 
   },
   { 
-    id: 'mysterious-dark', 
-    label: 'Bí Ẩn 🌑', 
-    prompt: 'Cinematic dark aesthetic, mysterious atmosphere, low light, deep shadows, 8k resolution, vertical 9:16, professional color grading, intrigue and suspense.', 
+    id: 'hyper-real-8k', 
+    label: 'Siêu Thực 📸', 
+    prompt: 'Hyper-realistic 8k, photorealistic details, cinematic lighting, sharp focus, masterwork.', 
+    icon: '📸', 
+    description: 'Độ chi tiết cực cao như đời thực.' 
+  },
+  { 
+    id: 'anime-vibe', 
+    label: 'Hoạt Hình 🎨', 
+    prompt: 'Modern anime style, vibrant cel-shaded, studio ghibli lighting, expressive movement.', 
+    icon: '🎨', 
+    description: 'Phong cách hoạt hình Nhật Bản.' 
+  },
+  { 
+    id: 'mysterious-story', 
+    label: 'Kể Chuyện 🌑', 
+    prompt: 'Moody atmospheric, slow cinematic motion, deep shadows, mysterious lighting.', 
     icon: '🌑', 
-    description: 'Kịch tính, bí ẩn và thu hút.' 
+    description: 'Kịch tính và bí ẩn.' 
   },
   { 
-    id: 'street-pro-night', 
-    label: 'Đêm Thành Phố 🌃', 
-    prompt: 'Hyper-realistic night street view, neon light trails, 8k vertical video, wet pavement reflections, urban atmosphere, movie-like camera motion.', 
-    icon: '🌃', 
-    description: 'Không khí đô thị ban đêm rực rỡ neon.' 
-  },
-  { 
-    id: 'luxury-vibe', 
-    label: 'Sang Trọng ✨', 
-    prompt: 'Luxury life aesthetic, high-end details, golden hour lighting, clean and sophisticated 9:16 video, premium cinematography, smooth slow motion.', 
+    id: 'luxury-aesthetic', 
+    label: 'Luxury ✨', 
+    prompt: 'Minimalist luxury, golden hour, smooth elegant motion, expensive look.', 
     icon: '✨', 
-    description: 'Phong cách sang trọng, đẳng cấp.' 
+    description: 'Sang trọng và đẳng cấp.' 
+  },
+  { 
+    id: 'cyberpunk-neon', 
+    label: 'Cyberpunk 🌃', 
+    prompt: 'Neon cyberpunk aesthetic, wet reflections, high contrast, futuristic city movement.', 
+    icon: '🌃', 
+    description: 'Tương lai rực rỡ sắc màu.' 
   }
 ];
 
-const AI_VOICES: { id: AIVoice, label: string }[] = [
-  { id: 'Puck', label: 'Puck (Trẻ trung, Viral)' },
-  { id: 'Kore', label: 'Kore (Mạnh mẽ, Cuốn hút)' },
+const VIRAL_FRAMEWORKS: ViralFramework[] = [
+  { id: 'twist', label: 'Cú Twist Bất Ngờ 🎭', description: 'Mở đầu bình thường, kết thúc gây sốc.' },
+  { id: 'problem-solution', label: 'Vấn Đề - Giải Pháp 💡', description: 'Đánh vào nỗi đau và đưa ra lối thoát.' },
+  { id: 'storytelling', label: 'Kể Chuyện (Story) 📖', description: 'Dẫn dắt cảm xúc qua một câu chuyện ngắn.' },
+  { id: 'how-to', label: 'Hướng Dẫn (Tips) 🛠️', description: 'Chia sẻ kiến thức nhanh, giá trị cao.' },
+  { id: 'behind-scenes', label: 'Hậu Trường (BTS) 🎥', description: 'Sự thật đằng sau những thứ hào nhoáng.' }
+];
+
+const VOICE_OPTIONS = [
+  { id: 'Zephyr', label: 'Zephyr (Nam - TikTok Standard)', theme: 'Dễ nghe, đa năng' },
+  { id: 'Puck', label: 'Puck (Nam - Energetic/Funny)', theme: 'Hài hước, hoạt hình' },
+  { id: 'Kore', label: 'Kore (Nữ - Inspiring)', theme: 'Truyền cảm hứng, nhẹ nhàng' },
+  { id: 'Charon', label: 'Charon (Nam - Deep/Calm)', theme: 'Trầm ấm, siêu thực' },
+  { id: 'Fenrir', label: 'Fenrir (Nam - Authority)', theme: 'Mạnh mẽ, phóng sự' }
 ];
 
 // --- Helper Functions ---
@@ -128,17 +147,7 @@ function bufferToWave(abuffer: AudioBuffer, len: number) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-const parseSafeJson = (text: string | undefined): any => {
-  if (!text || !text.trim()) throw new Error("AI không phản hồi.");
-  let cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/g, '');
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1) throw new Error("Dữ liệu JSON từ AI không hợp lệ.");
-  return JSON.parse(cleaned.substring(start, end + 1));
-};
-
 const ViralVibeApp: React.FC = () => {
-  const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
   const [sourceImage, setSourceImage] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [ttsUrl, setTtsUrl] = useState<string | null>(null);
@@ -149,146 +158,108 @@ const ViralVibeApp: React.FC = () => {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [prompt, setPrompt] = useState<string>('Biến video này thành xu hướng TikTok cực hot');
   const [selectedTemplate, setSelectedTemplate] = useState<VideoTemplate>(VIDEO_TEMPLATES[0]);
+  const [selectedFramework, setSelectedFramework] = useState<ViralFramework>(VIRAL_FRAMEWORKS[0]);
+  const [duration, setDuration] = useState<VideoDuration>(20);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [selectedVoice, setSelectedVoice] = useState<AIVoice>('Puck');
+  const [selectedVoice, setSelectedVoice] = useState<AIVoice>('Zephyr');
   const [quotaCountdown, setQuotaCountdown] = useState<number>(0);
-  const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const checkKey = async () => {
-      if (window.aistudio?.hasSelectedApiKey) setApiKeySelected(await window.aistudio.hasSelectedApiKey());
-      else setApiKeySelected(!!process.env.API_KEY);
-    };
-    checkKey();
-    
-    // Load projects and draft
-    const stored = localStorage.getItem(SAVED_PROJECTS_KEY);
-    if (stored) try { setSavedProjects(JSON.parse(stored)); } catch (e) {}
-
-    const draft = localStorage.getItem(DRAFT_KEY);
-    if (draft) {
-      try {
-        const d = JSON.parse(draft);
-        setPrompt(d.prompt || '');
-        setSourceImage(d.sourceImage || null);
-        const template = VIDEO_TEMPLATES.find(t => t.id === d.templateId);
-        if (template) setSelectedTemplate(template);
-      } catch (e) {}
-    }
-  }, []);
-
-  // Auto-save draft
-  useEffect(() => {
-    const draft = { prompt, sourceImage, templateId: selectedTemplate.id };
-    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-  }, [prompt, sourceImage, selectedTemplate]);
-
-  const saveToStorage = (projects: SavedProject[]) => {
-    try {
-      localStorage.setItem(SAVED_PROJECTS_KEY, JSON.stringify(projects));
-      setSavedProjects(projects);
-    } catch (e) {
-      alert("Bộ nhớ đầy! Vui lòng xóa bớt dự án cũ.");
-    }
-  };
-
-  const handleSaveProject = () => {
-    const name = window.prompt("Tên dự án:", `Dự án ${new Date().toLocaleTimeString()}`);
-    if (!name) return;
-    const newProject: SavedProject = {
-      id: crypto.randomUUID(), name, prompt, templateId: selectedTemplate.id,
-      voice: selectedVoice, sourceImage, metadata, timestamp: Date.now()
-    };
-    saveToStorage([newProject, ...savedProjects].slice(0, 15));
-    setStatus("Đã lưu!"); setTimeout(() => setStatus(""), 2000);
-  };
-
-  const handleLoadProject = (project: SavedProject) => {
-    if (!window.confirm(`Tải dự án "${project.name}"?`)) return;
-    setPrompt(project.prompt);
-    setSelectedTemplate(VIDEO_TEMPLATES.find(t => t.id === project.templateId) || VIDEO_TEMPLATES[0]);
-    setSelectedVoice(project.voice);
-    setSourceImage(project.sourceImage);
-    setMetadata(project.metadata);
-    setVideoUrl(null); setTtsUrl(null);
-  };
-
-  const handleDeleteProject = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm("Xóa dự án?")) saveToStorage(savedProjects.filter(p => p.id !== id));
-  };
-
-  const updateSubtitle = (id: string, newText: string) => {
-    if (!metadata) return;
-    const updated = metadata.subtitles.map(s => s.id === id ? { ...s, text: newText } : s);
-    setMetadata({ ...metadata, subtitles: updated });
-  };
 
   async function callWithRetry<T>(fn: () => Promise<T>, onRetry: (msg: string) => void, retries = 5): Promise<T> {
     let attempt = 0;
     while (attempt < retries) {
       try { return await fn(); } catch (error: any) {
         attempt++;
-        const isQuota = error.message?.toLowerCase().includes('429');
+        const errMsg = error.message?.toLowerCase() || "";
         if (attempt >= retries) throw error;
-        if (isQuota) {
-          onRetry(`Đợi reset hạn mức (429)...`);
-          for (let i = 100; i > 0; i--) { 
+        if (errMsg.includes('429') || errMsg.includes('quota')) {
+          onRetry(`Tài khoản đang chờ reset...`);
+          for (let i = 120; i > 0; i--) { 
             setQuotaCountdown(i); 
-            await new Promise(r => {
-              const timer = setTimeout(r, 1000);
-              // Nút "Thử lại ngay" có thể xóa timer này (logic đơn giản hóa: cứ đợi)
-            }); 
+            await new Promise(r => setTimeout(r, 1000)); 
           }
           setQuotaCountdown(0);
-        } else await new Promise(r => setTimeout(r, 5000));
+        } else if (errMsg.includes('500') || errMsg.includes('internal')) {
+          onRetry(`Server bận, đang thử lại sau 10s...`);
+          await new Promise(r => setTimeout(r, 10000));
+        } else {
+          await new Promise(r => setTimeout(r, 5000));
+        }
       }
     }
-    throw new Error("Hệ thống bận.");
+    throw new Error("Không thể kết nối API.");
   }
 
   const handleGenerate = async () => {
     if (!sourceImage) return;
-    setLoading(true); setStatus('Sáng tạo kịch bản xu hướng...'); setMetadata(null);
+
+    if (window.aistudio && typeof window.aistudio.hasSelectedApiKey === 'function') {
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      if (!hasKey) await window.aistudio.openSelectKey();
+    }
+
+    setLoading(true); setStatus(`Đang thiết kế kịch bản ${selectedFramework.label}...`); setMetadata(null);
     if (videoUrl) URL.revokeObjectURL(videoUrl); if (ttsUrl) URL.revokeObjectURL(ttsUrl);
     setVideoUrl(null); setTtsUrl(null);
 
     try {
-      const metaRes = await callWithRetry(async () => {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        return await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: `Create VIRAL TikTok metadata for: "${prompt}". 
-          Focus on curious hooks for Vietnamese audience. 
-          Subtitles should be short and punchy.
-          JSON ONLY: { 
-            "catchyTitles": ["Title 1", "Title 2", "Title 3"], 
-            "hashtags": ["xuhuong", "fyp", "trending"], 
-            "description": "Viral description",
-            "viralScore": 99,
-            "cta": "Like for Part 2",
-            "subtitles": [{"text": "BẠN CÓ BIẾT...", "start": 0, "end": 2.5}, {"text": "ĐÂY LÀ BÍ MẬT...", "start": 2.5, "end": 5}]
-          }`,
-          config: { responseMimeType: 'application/json' }
-        });
-      }, setStatus);
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const metaRes = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `Kịch bản TikTok Viral ${duration}s. Ý tưởng: "${prompt}". Khung kịch bản: ${selectedFramework.label}.`,
+        config: {
+          systemInstruction: `Bạn là chuyên gia sáng tạo nội dung TikTok.
+          Nhiệm vụ:
+          1. Phụ đề: 3-6 câu ngắn, sử dụng từ ngữ "Gen Z", kịch tính.
+          2. visualPrompt: Mô tả chuyển động bằng tiếng Anh (Dưới 12 từ).
+          3. Tiêu đề: 3 tiêu đề clickbait sạch cực mạnh.
+          4. Hashtags: 5 hashtag dẫn đầu xu hướng 2025.`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              catchyTitles: { type: Type.ARRAY, items: { type: Type.STRING } },
+              hashtags: { type: Type.ARRAY, items: { type: Type.STRING } },
+              description: { type: Type.STRING },
+              visualPrompt: { type: Type.STRING },
+              viralScore: { type: Type.NUMBER },
+              cta: { type: Type.STRING },
+              subtitles: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING },
+                    start: { type: Type.NUMBER },
+                    end: { type: Type.NUMBER }
+                  },
+                  required: ['text', 'start', 'end']
+                }
+              }
+            },
+            required: ['catchyTitles', 'hashtags', 'description', 'visualPrompt', 'viralScore', 'cta', 'subtitles']
+          }
+        }
+      });
 
-      const meta: ViralMetadata = parseSafeJson(metaRes.text);
+      const meta: ViralMetadata = JSON.parse(metaRes.text);
       meta.subtitles = meta.subtitles?.map((s, i) => ({ ...s, id: `s-${i}` })) || [];
       setMetadata(meta);
 
-      setStatus('Lồng tiếng AI (High-fidelity)...');
+      setStatus(`Đang lồng tiếng AI chủ đề ${selectedVoice}...`);
       const speechText = meta.subtitles.map(s => s.text).join('. ');
       const ttsRes = await callWithRetry(async () => {
         const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
         return await currentAi.models.generateContent({
           model: 'gemini-2.5-flash-preview-tts',
           contents: [{ parts: [{ text: speechText }] }],
-          config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } } }
+          config: { 
+            responseModalities: [Modality.AUDIO], 
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } } } 
+          }
         });
       }, setStatus);
 
@@ -299,60 +270,88 @@ const ViralVibeApp: React.FC = () => {
         setTtsUrl(URL.createObjectURL(bufferToWave(audioBuffer, audioBuffer.length)));
       }
 
-      setStatus('Đang Render Video TikTok (0/3)...');
-      let op = await callWithRetry(async () => {
-        const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        return await currentAi.models.generateVideos({
-          model: 'veo-3.1-fast-generate-preview',
-          prompt: `${selectedTemplate.prompt}. ${prompt}. Cinematic.`,
-          image: { imageBytes: sourceImage.split(',')[1], mimeType: 'image/jpeg' },
-          config: { resolution: '720p', aspectRatio: '9:16' }
-        });
-      }, setStatus);
+      const pollOperation = async (operation: any, stageLabel: string) => {
+        let currentOp = operation;
+        let pollCount = 0;
+        await new Promise(r => setTimeout(r, 15000));
+        while (!currentOp.done) {
+          pollCount++;
+          setStatus(`[${stageLabel}] Xử lý AI Style: ${selectedTemplate.label}... (${pollCount * 12}s)`);
+          await new Promise(r => setTimeout(r, 12000));
+          currentOp = await callWithRetry(async () => {
+            const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            return await currentAi.operations.getVideosOperation({ operation: currentOp });
+          }, setStatus);
+        }
+        if (currentOp.error) throw new Error(currentOp.error.message);
+        return currentOp;
+      };
 
-      while (!op.done) {
-        await new Promise(r => setTimeout(r, 20000));
-        op = await callWithRetry(async () => {
-          const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
-          return await currentAi.operations.getVideosOperation({ operation: op });
-        }, setStatus);
-      }
+      const imageMimeType = sourceImage.split(';')[0].split(':')[1] || 'image/jpeg';
+      const imageBase64 = sourceImage.split(',')[1];
+      const numExtensions = Math.ceil((duration - 7) / 7);
+      const totalStages = numExtensions + 1;
 
-      let currentVideo = op.response?.generatedVideos?.[0]?.video;
-      if (!currentVideo) throw new Error("Render thất bại.");
-
-      for (let i = 0; i < 2; i++) {
-        setStatus(`Mở rộng nội dung (${i + 2}/3)...`);
-        await new Promise(r => setTimeout(r, 5000));
-        op = await callWithRetry(async () => {
+      const generateVideoAttempt = async (vPrompt: string) => {
+        return await callWithRetry(async () => {
           const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
           return await currentAi.models.generateVideos({
             model: 'veo-3.1-fast-generate-preview',
-            prompt: `Part ${i + 2} of viral story: ${prompt}. High impact visuals.`,
-            video: currentVideo,
-            config: { resolution: '720p', aspectRatio: '9:16' }
+            prompt: `${selectedTemplate.prompt} ${vPrompt}`,
+            image: { imageBytes: imageBase64, mimeType: imageMimeType },
+            config: { resolution: '720p', aspectRatio: '9:16', numberOfVideos: 1 }
           });
         }, setStatus);
+      };
 
-        while (!op.done) {
-          await new Promise(r => setTimeout(r, 20000));
-          op = await callWithRetry(async () => {
-            const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            return await currentAi.operations.getVideosOperation({ operation: op });
-          }, setStatus);
+      setStatus(`Bắt đầu Render lớp ${selectedTemplate.label} (1/${totalStages})...`);
+      let op;
+      try {
+        op = await generateVideoAttempt(meta.visualPrompt);
+        op = await pollOperation(op, `Giai đoạn 1/${totalStages}`);
+      } catch (e: any) {
+        setStatus("Server bận, đang kích hoạt Safe-Mode Render...");
+        await new Promise(r => setTimeout(r, 5000));
+        op = await generateVideoAttempt("Cinematic natural movement.");
+        op = await pollOperation(op, `Giai đoạn 1/${totalStages} (Safe)`);
+      }
+
+      let currentVideo = op.response?.generatedVideos?.[0]?.video;
+      if (!currentVideo) throw new Error("Server AI bận. Thử lại sau 5 phút.");
+
+      for (let i = 0; i < numExtensions; i++) {
+        const stage = i + 2;
+        setStatus(`Mở rộng phong cách (Stage ${stage}/${totalStages})...`);
+        await new Promise(r => setTimeout(r, 8000));
+        let extOp = await callWithRetry(async () => {
+          const currentAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          return await currentAi.models.generateVideos({
+            model: 'veo-3.1-fast-generate-preview',
+            prompt: `Continue style and motion naturally.`,
+            video: currentVideo,
+            config: { resolution: '720p', aspectRatio: '9:16', numberOfVideos: 1 }
+          });
+        }, setStatus);
+        extOp = await pollOperation(extOp, `Giai đoạn ${stage}/${totalStages}`);
+        if (extOp.response?.generatedVideos?.[0]?.video) {
+          currentVideo = extOp.response.generatedVideos[0].video;
         }
-        if (op.response?.generatedVideos?.[0]?.video) currentVideo = op.response.generatedVideos[0].video;
       }
 
       const videoResp = await fetch(`${currentVideo?.uri}&key=${process.env.API_KEY}`);
       setVideoUrl(URL.createObjectURL(await videoResp.blob()));
-      setStatus('Hoàn thành cực phẩm TikTok! 🔥');
-    } catch (e: any) { setStatus(`Lỗi: ${e.message}`); } finally { setLoading(false); setQuotaCountdown(0); }
+      setStatus('Siêu phẩm Viral đã sẵn sàng! 🔥');
+    } catch (e: any) { 
+      setStatus(`Lỗi: ${e.message}`); 
+    } finally { 
+      setLoading(false); 
+      setQuotaCountdown(0); 
+    }
   };
 
   const handleExport = async () => {
     if (!videoUrl || !videoRef.current || !metadata) return;
-    setExporting(true); setStatus('Đang nén video chất lượng cao...');
+    setExporting(true); setStatus('Đang hoàn thiện video TikTok...');
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false })!;
@@ -365,16 +364,17 @@ const ViralVibeApp: React.FC = () => {
         const ttsSource = audioCtx.createMediaElementSource(audioRef.current); ttsSource.connect(dest); 
     }
     const recorder = new MediaRecorder(new MediaStream([...stream.getVideoTracks(), ...dest.stream.getAudioTracks()]), { 
-      mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 18000000 
+      mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 25000000 
     });
     const chunks: Blob[] = []; recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: 'video/mp4' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `ViralVibe_916_${Date.now()}.mp4`; a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `ViralVibe_V3_${Date.now()}.mp4`; a.click();
       setExporting(false);
     };
     video.currentTime = 0; if (audioRef.current) audioRef.current.currentTime = 0;
     try { await video.play(); if (audioRef.current) await audioRef.current.play(); recorder.start(); } catch (e) { recorder.start(); }
+    
     const renderLoop = () => {
       if (!exporting || video.paused || video.ended) { if (recorder.state === 'recording') recorder.stop(); return; }
       setExportProgress((video.currentTime / video.duration) * 100);
@@ -382,13 +382,12 @@ const ViralVibeApp: React.FC = () => {
       const sub = metadata.subtitles.find(s => video.currentTime >= s.start && video.currentTime <= s.end);
       if (sub) {
         ctx.save();
-        ctx.font = 'bold 110px "Anton"'; ctx.textAlign = 'center';
-        ctx.strokeStyle = 'black'; ctx.lineWidth = 25; ctx.strokeText(sub.text.toUpperCase(), w / 2, h * 0.72);
-        ctx.fillStyle = '#FE2C55'; ctx.fillText(sub.text.toUpperCase(), w / 2, h * 0.72);
+        ctx.font = '900 115px "Be Vietnam Pro"'; ctx.textAlign = 'center';
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 30; ctx.strokeText(sub.text.toUpperCase(), w / 2, h * 0.75);
+        ctx.fillStyle = '#FE2C55'; ctx.fillText(sub.text.toUpperCase(), w / 2, h * 0.75);
         ctx.restore();
       }
-      ctx.fillStyle = 'white'; ctx.font = 'bold 45px sans-serif'; ctx.fillText('@ViralVibe_AI_TikTok', 70, h - 380);
-      ctx.font = '32px sans-serif'; ctx.fillText(metadata.hashtags.map(h => '#' + h).join(' '), 70, h - 300);
+      ctx.fillStyle = 'white'; ctx.font = '900 45px "Be Vietnam Pro"'; ctx.fillText('@ViralVibe_V3', 80, h - 420);
       requestAnimationFrame(renderLoop);
     };
     renderLoop();
@@ -402,202 +401,164 @@ const ViralVibeApp: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#050505] text-white flex flex-col font-sans selection:bg-[#FE2C55] overflow-x-hidden">
-      <nav className="p-6 border-b border-white/5 flex justify-between items-center bg-black/90 backdrop-blur-3xl sticky top-0 z-[100]">
+      <nav className="p-6 border-b border-white/5 flex justify-between items-center bg-black/95 backdrop-blur-3xl sticky top-0 z-[100]">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-[#FE2C55] rounded-2xl flex items-center justify-center font-black italic shadow-[0_0_40px_rgba(254,44,85,0.4)] text-xl">V</div>
-          <h1 className="text-2xl font-black italic tracking-tighter uppercase">ViralVibe <span className="text-[#25F4EE]">TIKTOK PRO</span></h1>
+          <div className="w-12 h-12 bg-[#FE2C55] rounded-2xl flex items-center justify-center font-black italic shadow-[0_0_40px_rgba(254,44,85,0.4)] text-xl">V3</div>
+          <h1 className="text-2xl font-black italic tracking-tighter uppercase">ViralVibe <span className="text-[#25F4EE]">ULTRA</span></h1>
         </div>
-        <div className="flex items-center gap-4 md:gap-8">
-           <button onClick={handleSaveProject} className="hidden md:block bg-zinc-800 text-[10px] font-black uppercase px-4 py-2 rounded-full hover:bg-white hover:text-black transition-all">Lưu dự án 💾</button>
-           <button onClick={() => window.aistudio?.openSelectKey?.()} className="bg-[#FE2C55] text-white px-6 py-2 rounded-full font-black text-[10px] uppercase shadow-lg hover:scale-105 transition-all">Đổi Engine AI ⚡</button>
-        </div>
+        <button onClick={() => window.aistudio?.openSelectKey?.()} className="bg-[#FE2C55] text-white px-8 py-2 rounded-full font-black text-[11px] uppercase shadow-lg hover:scale-105 transition-all">Tài Khoản AI ⚡</button>
       </nav>
 
-      <main className="flex-1 p-4 md:p-8 max-w-[1800px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 relative">
-        {/* Panel 1: Creative Hub */}
-        <div className="lg:col-span-4 space-y-8 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto scrollbar-hide pr-1">
-          <section className="bg-zinc-900/50 p-8 lg:p-10 rounded-[3.5rem] border border-white/5 space-y-8 shadow-2xl relative overflow-hidden">
-            <h2 className="text-[11px] font-black uppercase text-[#FE2C55] tracking-[0.3em] opacity-50">Cấu hình sáng tạo</h2>
+      <main className="flex-1 p-4 md:p-8 max-w-[1850px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="lg:col-span-4 space-y-6 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto scrollbar-hide">
+          <section className="bg-zinc-900/50 p-8 rounded-[3rem] border border-white/5 space-y-8 shadow-2xl">
+            <h2 className="text-[12px] font-black uppercase text-[#FE2C55] tracking-[0.4em] opacity-40 text-center">Studio Configuration</h2>
             
             <div className="space-y-4">
-              <label className="text-[10px] font-bold opacity-40 uppercase ml-2">CHỌN PHONG CÁCH</label>
-              <div className="grid grid-cols-2 gap-3">
-                {VIDEO_TEMPLATES.map(t => (
-                  <button key={t.id} onClick={() => setSelectedTemplate(t)} className={`p-4 rounded-2xl border text-left transition-all ${selectedTemplate.id === t.id ? 'bg-[#FE2C55] border-[#FE2C55] shadow-xl scale-[1.02]' : 'bg-black/40 border-white/5 opacity-50 hover:opacity-100'}`}>
-                    <div className="text-2xl mb-2">{t.icon}</div>
-                    <div className="text-[10px] font-black uppercase tracking-tighter">{t.label}</div>
+              <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest">Khung kịch bản (Framework)</label>
+              <div className="grid grid-cols-1 gap-2">
+                {VIRAL_FRAMEWORKS.map(f => (
+                  <button key={f.id} onClick={() => setSelectedFramework(f)} className={`p-4 rounded-2xl border text-left transition-all ${selectedFramework.id === f.id ? 'bg-[#FE2C55] border-[#FE2C55]' : 'bg-black/40 border-white/5 opacity-40'}`}>
+                    <div className="font-black text-sm">{f.label}</div>
+                    <div className="text-[10px] opacity-60">{f.description}</div>
                   </button>
                 ))}
               </div>
             </div>
 
             <div className="space-y-4">
-              <label className="text-[10px] font-bold opacity-40 uppercase ml-2">Ý TƯỞNG CỐT TRUYỆN</label>
-              <textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="w-full bg-black/60 border border-white/10 rounded-3xl px-6 py-5 outline-none font-bold text-sm min-h-[100px] focus:border-[#FE2C55]/50 transition-all placeholder:opacity-20" placeholder="Mô tả ngắn gọn ý tưởng của bạn..." />
+              <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest">Phong cách AI (Visual Style)</label>
+              <div className="grid grid-cols-3 gap-2">
+                {VIDEO_TEMPLATES.map(t => (
+                  <button key={t.id} onClick={() => setSelectedTemplate(t)} className={`p-3 rounded-2xl border text-center transition-all ${selectedTemplate.id === t.id ? 'bg-[#25F4EE] border-[#25F4EE] text-black' : 'bg-black/40 border-white/5 opacity-40'}`}>
+                    <div className="text-xl mb-1">{t.icon}</div>
+                    <div className="text-[9px] font-black uppercase">{t.label}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-4">
-              <label className="text-[10px] font-bold opacity-40 uppercase ml-2">ẢNH GỐC (THAM KHẢO 9:16)</label>
-              <div onClick={() => fileInputRef.current?.click()} className="group relative border-2 border-dashed border-white/10 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-[#FE2C55]/50 hover:bg-black/40 transition-all bg-black/20">
-                {sourceImage ? <img src={sourceImage} className="max-h-48 mx-auto rounded-2xl shadow-2xl" alt="Preview" /> : <div className="opacity-20 group-hover:opacity-100 transition-opacity"><p className="text-5xl mb-3">🖼️</p><p className="text-[10px] font-black uppercase tracking-widest">Tải ảnh lên</p></div>}
+              <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest">Giọng đọc & Chủ đề</label>
+              <div className="grid grid-cols-1 gap-2">
+                {VOICE_OPTIONS.map(v => (
+                  <button key={v.id} onClick={() => setSelectedVoice(v.id as AIVoice)} className={`p-4 rounded-2xl border text-left transition-all ${selectedVoice === v.id ? 'bg-white text-black' : 'bg-black/40 border-white/5 opacity-40'}`}>
+                    <div className="font-black text-sm">{v.label}</div>
+                    <div className="text-[10px] opacity-60 italic">{v.theme}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest ml-1">Chủ đề video</label>
+              <textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="w-full bg-black/60 border border-white/10 rounded-3xl px-6 py-5 outline-none font-bold text-sm min-h-[100px] focus:border-[#FE2C55]/50 transition-all" placeholder="Ví dụ: Cách làm giàu nhanh chóng..." />
+            </div>
+
+            <div className="space-y-4">
+              <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest ml-1">Ảnh Gốc (9:16)</label>
+              <div onClick={() => fileInputRef.current?.click()} className="group border-2 border-dashed border-white/10 rounded-[2rem] p-8 text-center cursor-pointer hover:border-[#FE2C55]/50 transition-all">
+                {sourceImage ? <img src={sourceImage} className="max-h-40 mx-auto rounded-2xl shadow-xl" /> : <div><p className="text-4xl mb-2">📸</p><p className="text-[10px] font-black uppercase">Click để chọn ảnh</p></div>}
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if(f) { const r = new FileReader(); r.onloadend = () => setSourceImage(r.result as string); r.readAsDataURL(f); } }} />
               </div>
             </div>
 
-            <button onClick={handleGenerate} disabled={loading || !sourceImage} className="w-full py-7 bg-[#25F4EE] text-black rounded-3xl font-black text-xl uppercase shadow-2xl hover:scale-[1.03] active:scale-95 transition-all disabled:opacity-20 flex items-center justify-center gap-4">
-              {loading ? <div className="w-6 h-6 border-4 border-black border-t-transparent rounded-full animate-spin"></div> : 'TẠO SIÊU PHẨM VIRAL 🔥'}
+            <button onClick={handleGenerate} disabled={loading || !sourceImage} className="w-full py-6 bg-[#FE2C55] text-white rounded-[2rem] font-black text-lg uppercase shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-20 flex items-center justify-center gap-4">
+              {loading ? <div className="w-6 h-6 border-4 border-white border-t-transparent rounded-full animate-spin"></div> : 'TẠO VIDEO VIRAL 🚀'}
             </button>
-
-            {quotaCountdown > 0 && (
-              <div className="absolute inset-0 bg-black/95 backdrop-blur-2xl z-[200] flex flex-col items-center justify-center p-12 text-center animate-fade-in">
-                <div className="w-48 h-48 relative mb-8">
-                  <svg className="w-full h-full rotate-[-90deg]">
-                    <circle cx="96" cy="96" r="86" stroke="currentColor" strokeWidth="12" fill="transparent" className="text-white/5" />
-                    <circle cx="96" cy="96" r="86" stroke="currentColor" strokeWidth="12" fill="transparent" className="text-[#FE2C55]" strokeDasharray="540" strokeDashoffset={540 - (quotaCountdown / 100) * 540} />
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center font-black text-6xl italic tracking-tighter">{quotaCountdown}</div>
-                </div>
-                <h3 className="text-2xl font-black text-white mb-2 uppercase italic tracking-tighter">API Đang Nghỉ Ngơi</h3>
-                <p className="text-[10px] opacity-40 uppercase tracking-[0.3em] mb-8">Tự động tiếp tục sau giây lát...</p>
-                <button onClick={() => setQuotaCountdown(0)} className="bg-white/5 text-white/40 px-6 py-2 rounded-full text-[9px] font-black uppercase hover:bg-white/10 transition-all">Thử lại ngay</button>
-              </div>
-            )}
           </section>
-
-          {savedProjects.length > 0 && (
-            <section className="bg-zinc-900/40 p-10 rounded-[3.5rem] border border-white/5 space-y-6 shadow-2xl">
-              <h2 className="text-[11px] font-black uppercase text-[#25F4EE] tracking-[0.3em] opacity-50">Dự án đã lưu</h2>
-              <div className="space-y-3">
-                {savedProjects.map(p => (
-                  <div key={p.id} onClick={() => handleLoadProject(p)} className="group bg-black/40 hover:bg-black/80 border border-white/5 hover:border-[#25F4EE]/30 rounded-3xl p-5 cursor-pointer transition-all flex items-center gap-5">
-                    <div className="w-16 h-16 bg-zinc-800 rounded-2xl overflow-hidden flex-shrink-0 shadow-xl ring-1 ring-white/5">
-                      {p.sourceImage ? <img src={p.sourceImage} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-xl">📽️</div>}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-black text-sm truncate uppercase tracking-tighter">{p.name}</p>
-                      <p className="text-[9px] opacity-30 font-bold uppercase tracking-widest">{new Date(p.timestamp).toLocaleDateString()}</p>
-                    </div>
-                    <button onClick={(e) => handleDeleteProject(p.id, e)} className="p-3 opacity-0 group-hover:opacity-100 hover:text-[#FE2C55] transition-all text-xl">🗑️</button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
 
-        {/* Panel 2: Smartphone Studio */}
         <div className="lg:col-span-4 flex flex-col items-center">
-          <div className="relative w-full max-w-[450px] aspect-[9/16] bg-[#0c0c0c] rounded-[5rem] p-[12px] border-[16px] border-[#1a1a1a] shadow-[0_0_150px_rgba(0,0,0,1)] ring-1 ring-white/10">
-            {/* Camera Notch */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[160px] h-[35px] bg-[#1a1a1a] rounded-b-[25px] z-30 flex items-center justify-center gap-3">
-               <div className="w-2 h-2 rounded-full bg-[#050505]"></div>
-               <div className="w-8 h-1 rounded-full bg-[#050505]"></div>
-            </div>
-            
-            <div className="w-full h-full rounded-[4rem] overflow-hidden bg-zinc-950 relative shadow-inner">
+          <div className="relative w-full max-w-[400px] aspect-[9/16] bg-[#0c0c0c] rounded-[4.5rem] p-[10px] border-[12px] border-[#181818] shadow-2xl ring-1 ring-white/10">
+            <div className="w-full h-full rounded-[3.8rem] overflow-hidden bg-zinc-950 relative shadow-inner">
               {videoUrl ? (
                 <>
                   <video ref={videoRef} src={videoUrl} loop muted className="w-full h-full object-cover" />
-                  {/* Real-time TikTok Subtitles */}
                   {metadata?.subtitles.find(s => currentTime >= s.start && currentTime <= s.end) && (
-                    <div className="absolute inset-x-8 bottom-[28%] text-center pointer-events-none z-40">
-                      <span className="bg-[#FE2C55] text-white px-8 py-5 rounded-[2rem] font-black text-base uppercase shadow-[0_20px_60px_rgba(254,44,85,0.6)] border-4 border-white animate-bounce-sub">
+                    <div className="absolute inset-x-8 bottom-[25%] text-center pointer-events-none z-40">
+                      <span className="bg-[#FE2C55] text-white px-6 py-3 rounded-2xl font-black text-md uppercase shadow-2xl border-[3px] border-white animate-bounce-sub inline-block leading-none">
                         {metadata.subtitles.find(s => currentTime >= s.start && currentTime <= s.end)?.text}
                       </span>
                     </div>
                   )}
-                  {/* TikTok Overlay HUD */}
-                  <div className="absolute right-6 bottom-[18%] flex flex-col gap-8 text-center pointer-events-none">
-                    <div className="flex flex-col items-center"><div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-3xl mb-1 backdrop-blur-xl">❤️</div><span className="text-[10px] font-black">99k</span></div>
-                    <div className="flex flex-col items-center"><div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-3xl mb-1 backdrop-blur-xl">💬</div><span className="text-[10px] font-black">1.2k</span></div>
-                    <div className="flex flex-col items-center"><div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-3xl mb-1 backdrop-blur-xl">↗️</div><span className="text-[10px] font-black">Share</span></div>
+                  <div className="absolute right-4 bottom-[15%] flex flex-col gap-6 text-center drop-shadow-lg">
+                    <div className="flex flex-col items-center"><div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center text-2xl mb-1 backdrop-blur-xl border border-white/10">❤️</div><span className="text-[9px] font-black">2.4M</span></div>
+                    <div className="flex flex-col items-center"><div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center text-2xl mb-1 backdrop-blur-xl border border-white/10">💬</div><span className="text-[9px] font-black">12k</span></div>
                   </div>
                 </>
               ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-8 opacity-10 p-12 text-center">
-                  <div className="w-24 h-24 border-8 border-white rounded-full border-t-transparent animate-spin"></div>
-                  <p className="font-black text-xs uppercase tracking-[0.5em] italic">Theater Engine Active</p>
+                <div className="w-full h-full flex flex-col items-center justify-center gap-6 opacity-10 p-12 text-center">
+                  <div className="w-16 h-16 border-[6px] border-white rounded-full border-t-transparent animate-spin"></div>
+                  <p className="font-black text-[10px] uppercase tracking-[0.4em]">Viral Engine V3 Ready</p>
                 </div>
               )}
             </div>
           </div>
           {videoUrl && (
-            <div className="mt-8 w-full max-w-[450px] space-y-4">
-               <button onClick={handleExport} disabled={exporting} className="w-full py-7 bg-white text-black rounded-3xl font-black text-xl uppercase shadow-2xl hover:bg-[#FE2C55] hover:text-white hover:scale-[1.03] transition-all">
-                {exporting ? `RENDER MP4 ${Math.round(exportProgress)}%` : 'XUẤT VIDEO 9:16 SẴN SÀNG 📥'}
+            <div className="mt-8 w-full max-w-[400px] space-y-4 px-4">
+               <button onClick={handleExport} disabled={exporting} className="w-full py-6 bg-white text-black rounded-[1.5rem] font-black text-md uppercase shadow-2xl hover:bg-[#FE2C55] hover:text-white transition-all">
+                {exporting ? `XUẤT VIDEO ${Math.round(exportProgress)}%` : `TẢI XUỐNG MP4 🎥`}
               </button>
             </div>
           )}
         </div>
 
-        {/* Panel 3: Script & Viral Tools */}
-        <div className="lg:col-span-4 space-y-8 h-full">
-           <section className="bg-zinc-900/50 p-8 lg:p-10 rounded-[3.5rem] border border-white/5 space-y-8 shadow-2xl h-full flex flex-col">
-              <h2 className="text-[11px] font-black uppercase text-[#25F4EE] tracking-[0.3em] opacity-50">Kịch bản & Phân tích</h2>
+        <div className="lg:col-span-4 space-y-6">
+           <section className="bg-zinc-900/50 p-8 rounded-[3rem] border border-white/5 space-y-8 shadow-2xl h-full">
+              <h2 className="text-[12px] font-black uppercase text-[#25F4EE] tracking-[0.4em] opacity-40 text-center">Viral Strategy</h2>
               
               {metadata ? (
-                <div className="space-y-10 animate-fade-in flex-1">
+                <div className="space-y-8 animate-fade-in">
                   <div className="space-y-4">
-                    <label className="text-[10px] font-bold opacity-40 uppercase tracking-widest">HOOK & PHỤ ĐỀ (NHẤP ĐỂ SỬA)</label>
-                    <div className="space-y-3 max-h-[300px] overflow-y-auto scrollbar-hide pr-2">
-                      {metadata.subtitles.map((s) => (
-                        <div key={s.id} className="bg-black/40 border border-white/10 rounded-2xl p-4 flex gap-4 items-center group transition-all focus-within:border-[#FE2C55]">
-                           <span className="text-[9px] font-black text-[#FE2C55] opacity-40">{s.start}s</span>
-                           <input 
-                            value={s.text} 
-                            onChange={(e) => updateSubtitle(s.id, e.target.value)} 
-                            className="flex-1 bg-transparent border-none outline-none font-bold text-xs uppercase italic tracking-tighter"
-                           />
-                           <span className="opacity-0 group-hover:opacity-100 transition-opacity">✍️</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="text-[10px] font-bold opacity-40 uppercase tracking-widest">TIÊU ĐỀ VIRAL GỢI Ý</label>
-                    <div className="space-y-3">
+                    <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest">Tiêu đề TikTok</label>
+                    <div className="space-y-2">
                       {metadata.catchyTitles.map((t, i) => (
-                        <div key={i} className="flex items-center bg-black/40 border border-white/5 rounded-2xl px-6 py-4 cursor-pointer hover:border-[#25F4EE] transition-all group" onClick={() => { navigator.clipboard.writeText(t); setStatus('Đã copy tiêu đề!'); }}>
-                          <span className="flex-1 font-bold text-xs italic group-hover:text-[#25F4EE]">{t}</span>
-                          <span className="text-xs opacity-20 group-hover:opacity-100">📋</span>
+                        <div key={i} className="flex items-center bg-black/40 border border-white/5 rounded-xl px-5 py-3 cursor-pointer hover:border-[#25F4EE] transition-all group" onClick={() => { navigator.clipboard.writeText(t); setStatus('Đã copy!'); }}>
+                          <span className="flex-1 font-bold text-[11px] italic group-hover:text-[#25F4EE]">{t}</span>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="p-10 bg-[#FE2C55]/5 rounded-[3rem] border border-[#FE2C55]/20 text-center shadow-inner relative overflow-hidden group">
-                    <div className="absolute inset-0 bg-gradient-to-br from-[#FE2C55]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                    <span className="text-[10px] font-black uppercase tracking-[0.5em] opacity-50 relative z-10">Viral Probability</span>
-                    <div className="text-8xl font-black italic text-[#FE2C55] mt-4 tracking-tighter relative z-10">{metadata.viralScore}%</div>
+                  <div className="space-y-4">
+                    <label className="text-[11px] font-bold opacity-30 uppercase tracking-widest">Hashtags 2025</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {metadata.hashtags.map((h, i) => (
+                        <span key={i} className="bg-[#25F4EE]/10 text-[#25F4EE] px-3 py-1.5 rounded-lg font-black text-[9px] uppercase border border-[#25F4EE]/20">#{h}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="p-8 bg-[#FE2C55]/5 rounded-[2.5rem] border border-[#FE2C55]/20 text-center">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] opacity-40">Chỉ số Viral</span>
+                    <div className="text-7xl font-black italic text-[#FE2C55] mt-3 tracking-tighter">{metadata.viralScore}%</div>
                   </div>
                 </div>
               ) : (
-                <div className="flex-1 flex flex-col items-center justify-center opacity-5 py-20 grayscale">
-                  <p className="text-9xl mb-8 animate-pulse">📈</p>
-                  <p className="font-black text-xs uppercase tracking-[0.6em] text-center max-w-[200px]">Đang chờ phân tích kịch bản...</p>
+                <div className="flex flex-col items-center justify-center opacity-10 py-24 grayscale">
+                  <p className="text-7xl mb-8">📽️</p>
+                  <p className="font-black text-[10px] uppercase tracking-[0.6em] text-center">Đang phân tích kịch bản...</p>
                 </div>
               )}
            </section>
         </div>
       </main>
 
-      {status && !quotaCountdown && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 px-10 py-5 bg-[#050505]/95 border border-[#25F4EE]/30 rounded-full text-[11px] font-black uppercase text-[#25F4EE] z-[400] shadow-[0_20px_80px_rgba(0,0,0,0.8)] flex items-center gap-6 animate-slide-up backdrop-blur-2xl">
+      {status && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 px-8 py-4 bg-black/95 border border-[#25F4EE]/30 rounded-full text-[10px] font-black uppercase text-[#25F4EE] z-[400] shadow-2xl flex items-center gap-5 animate-slide-up backdrop-blur-3xl">
           <div className="w-2 h-2 rounded-full bg-[#25F4EE] animate-pulse"></div>
           {status}
         </div>
       )}
 
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Anton&display=swap');
         @keyframes slideUp { from { opacity: 0; transform: translate(-50%, 40px); } to { opacity: 1; transform: translate(-50%, 0); } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes bounce-sub { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
-        .animate-slide-up { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
-        .animate-bounce-sub { animation: bounce-sub 1.5s ease-in-out infinite; }
-        textarea { resize: none; }
+        @keyframes bounce-sub { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+        .animate-slide-up { animation: slideUp 0.5s ease-out forwards; }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        .animate-bounce-sub { animation: bounce-sub 1.2s ease-in-out infinite; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
