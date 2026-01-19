@@ -1,3 +1,4 @@
+
 import express from "express";
 import crypto from "crypto";
 import os from "os";
@@ -7,7 +8,7 @@ import { pipeline } from "stream/promises";
 import { spawn } from "child_process";
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "5mb" }));
 
 function safeName(name) {
   return String(name || "").replace(/[^\w.\-]+/g, "_");
@@ -15,7 +16,7 @@ function safeName(name) {
 
 async function downloadToFile(url, filePath) {
   const r = await fetch(url);
-  if (!r.ok || !r.body) throw new Error("Không tải được video nguồn (videoUrl).");
+  if (!r.ok || !r.body) throw new Error("Không tải được video nguồn.");
   await pipeline(r.body, fs.createWriteStream(filePath));
 }
 
@@ -33,13 +34,10 @@ function runFfmpeg(args) {
 
 app.post("/api/export-subbed", async (req, res) => {
   const { videoUrl, srt, mode, filename } = req.body || {};
-
-  if (!videoUrl || typeof videoUrl !== "string") return res.status(400).send("Thiếu videoUrl");
-  if (!srt || typeof srt !== "string") return res.status(400).send("Thiếu srt");
-  if (!["burn", "soft"].includes(mode)) return res.status(400).send("mode phải là 'burn' hoặc 'soft'");
+  if (!videoUrl || !srt) return res.status(400).send("Thiếu dữ liệu videoUrl hoặc srt");
 
   const id = crypto.randomBytes(8).toString("hex");
-  const dir = path.join(os.tmpdir(), `export_${id}`);
+  const dir = path.join(os.tmpdir(), `vibe_pro_${id}`);
   fs.mkdirSync(dir, { recursive: true });
 
   const inPath = path.join(dir, "input.mp4");
@@ -51,47 +49,44 @@ app.post("/api/export-subbed", async (req, res) => {
     fs.writeFileSync(srtPath, srt, "utf8");
 
     if (mode === "soft") {
-      // Nhúng phụ đề dạng bật/tắt trong MP4 (mov_text)
+      // Soft-subs: Embedded mov_text track (Toggleable)
       await runFfmpeg([
-        "-y",
-        "-i", inPath,
-        "-i", srtPath,
-        "-map", "0",
-        "-map", "1",
-        "-c", "copy",
-        "-c:s", "mov_text",
+        "-y", "-i", inPath, "-i", srtPath,
+        "-map", "0", "-map", "1",
+        "-c", "copy", "-c:s", "mov_text",
         "-metadata:s:s:0", "language=vie",
-        outPath,
+        "-metadata:s:s:0", "title=ViralVibe Subs",
+        outPath
       ]);
     } else {
-      // Burn-in (đốt cứng) phụ đề vào video: đẹp kiểu TikTok
-      // Lưu ý: cần ffmpeg có libass + font hỗ trợ tiếng Việt trên container
-      const vf = `subtitles=${srtPath}:force_style='FontName=Noto Sans,Fontsize=28,Outline=2,Shadow=0,MarginV=40'`;
+      // Hard-subs: High-Contrast Burn-in for TikTok
+      // Styles for Vietnamese clarity: Shadow + Border + High Vertical Margin
+      const vf = `subtitles=${srtPath}:force_style='Fontname=Arial,Fontsize=26,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=2,Alignment=2,MarginV=60'`;
 
       await runFfmpeg([
-        "-y",
-        "-i", inPath,
+        "-y", "-i", inPath,
         "-vf", vf,
         "-c:v", "libx264",
-        "-crf", "18",
-        "-preset", "veryfast",
+        "-crf", "18",      // High quality Constant Rate Factor
+        "-preset", "slow", // Best compression efficiency
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
-        outPath,
+        outPath
       ]);
     }
 
-    const outName = safeName(filename) || `veo3_sub_${Date.now()}.mp4`;
+    const outName = safeName(filename) || `ViralVibe_Export_${Date.now()}.mp4`;
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Content-Disposition", `attachment; filename="${outName}"`);
 
-    fs.createReadStream(outPath)
-      .on("close", () => {
-        fs.rmSync(dir, { recursive: true, force: true });
-      })
-      .pipe(res);
+    const readStream = fs.createReadStream(outPath);
+    readStream.on("close", () => {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    });
+    readStream.pipe(res);
 
   } catch (e) {
+    console.error("Export Server Error:", e);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     res.status(500).send(String(e?.message || e));
   }
