@@ -1,5 +1,9 @@
 {
-  "description": "Professional TikTok Viral Engine: Auto-hooks, Manual Script Editor, 9:16 Theater Studio, and High-Resolution Exporting.",
-  "requestFramePermissions": [],
-  "name": "ViralVibe TikTok Pro v2"
+  "description": "Professional TikTok Viral Engine: Auto-hooks, Live Brainstorming, AI Image Editing, and High-Resolution Exporting.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "name": "ViralVibe TikTok Pro v3"
 }
