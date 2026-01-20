@@ -1,9 +1,9 @@
 {
-  "description": "Professional TikTok Viral Engine V3: Structured Script Beats, 20s Full-Screen Rendering, Hyper-Realistic Templates, and Expanded AI Voiceover Library.",
+  "name": "ViralVibe TikTok Pro V5",
+  "description": "Professional AI TikTok Studio with Cyberpunk FX, Advanced Scripting, and Pro Voiceovers.",
   "requestFramePermissions": [
     "camera",
     "microphone",
     "geolocation"
-  ],
-  "name": "ViralVibe TikTok Pro v3"
+  ]
 }
